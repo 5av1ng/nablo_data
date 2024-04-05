@@ -143,6 +143,7 @@ name = "nablo_shape"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "cfg-if",
  "fontdue",
  "once_cell",
  "rayon",

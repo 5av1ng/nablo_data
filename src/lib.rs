@@ -1,5 +1,6 @@
 //! data processing functions for `nablo`
 
+use std::ops::RangeInclusive;
 use nablo_shape::prelude::Animation;
 use time::Duration;
 use std::collections::HashMap;
@@ -19,8 +20,8 @@ pub enum DataEnum {
 	Enum(String, Vec<ParsedData>),
 	Data(Vec<u8>),
 	String(String),
-	/// contains if int can be negative or not
-	Int(i128, bool),
+	/// contains the range of original value
+	Int(i128, RangeInclusive<i128>),
 	Float(f64),
 	Bool(bool),
 	#[default] None,
@@ -142,7 +143,7 @@ macro_rules! impl_into_parsed_data {
 			}
 		}
 	};
-	($t: ty, $s: tt, $b: ident) => {
+	($t: ty, $s: tt, $b: expr) => {
 		impl From<$t> for ParsedData {
 			fn from(input: $t) -> Self {
 				ParsedData {
@@ -164,14 +165,14 @@ macro_rules! impl_serdelize {
 }
 
 impl_into_parsed_data!(bool, Bool);
-impl_into_parsed_data!(i8, Int, true);
-impl_into_parsed_data!(i16, Int, true);
-impl_into_parsed_data!(i32, Int, true);
-impl_into_parsed_data!(i64, Int, true);
-impl_into_parsed_data!(u8, Int, false);
-impl_into_parsed_data!(u16, Int, false);
-impl_into_parsed_data!(u32, Int, false);
-impl_into_parsed_data!(u64, Int, false);
+impl_into_parsed_data!(i8, Int, i8::MIN.into()..=i8::MAX.into());
+impl_into_parsed_data!(i16, Int, i16::MIN.into()..=i16::MAX.into());
+impl_into_parsed_data!(i32, Int, i32::MIN.into()..=i32::MAX.into());
+impl_into_parsed_data!(i64, Int, i64::MIN.into()..=i64::MAX.into());
+impl_into_parsed_data!(u8, Int, u8::MIN.into()..=u8::MAX.into());
+impl_into_parsed_data!(u16, Int, u16::MIN.into()..=u16::MAX.into());
+impl_into_parsed_data!(u32, Int, u32::MIN.into()..=u32::MAX.into());
+impl_into_parsed_data!(u64, Int, u64::MIN.into()..=u64::MAX.into());
 impl_into_parsed_data!(f32, Float);
 impl_into_parsed_data!(f64, Float);
 impl_into_parsed_data!(char, String);
@@ -782,6 +783,9 @@ pub trait CanBeAnimated<'a, T> where
 
 	fn caculate(&mut self, duration: &Duration) -> Result<(), Error> {
 		let map = self.get_animation_map().clone();
+		if map.is_empty() {
+			return Ok(())
+		}
 		let target = self.get_animate_target();
 		let mut parsed_data = to_data(target)?;
 		animation_caculate(&String::new(), &mut parsed_data, duration, &map);
@@ -809,14 +813,18 @@ fn animation_caculate(id: &String, data: &mut ParsedData, duration: &Duration, m
 				animation_caculate(&id, inside, duration, map);
 			}
 		},
-		DataEnum::Int(value, non_neg) => {
+		DataEnum::Int(value, range) => {
 			if let Some(t) = map.get(&id) {
 				if let Some(x) = t.caculate(duration) {
-					let mut x = x;
-					if *non_neg {
-						x = x.abs()
-					}
-					*value = x as i128;
+					let x = x as i128;
+					let compress = if x > *range.end() {
+						*range.end()
+					}else if x < *range.start(){
+						*range.start()
+					}else {
+						x
+					};
+					*value = compress;
 				}
 			}
 		},
@@ -825,6 +833,97 @@ fn animation_caculate(id: &String, data: &mut ParsedData, duration: &Duration, m
 				if let Some(x) = t.caculate(duration) {
 					*value = x as f64;
 				}
+			}
+		},
+		_ => {}
+	}
+}
+
+/// find difference for two structs, only avaluable for numeric fields. outputs left - right
+pub fn caculate_delta<T: Serialize>(left: &T, right: &T) -> Result<HashMap<String, f64>, Error> {
+	let left = to_data(left)?;
+	let right = to_data(right)?;
+	let mut map = HashMap::new();
+	caculate_delta_data(left, right, &mut map, String::new());
+	Ok(map)
+}
+
+/// find difference for two structs, only avaluable for numeric fields. outputs left - right
+pub fn apply_delta<'a, T: Serialize+ Deserialize<'a>>(input: &mut T, delta_map: &HashMap<String, f64>) -> Result<(), Error> {
+	if delta_map.is_empty() {
+		return Ok(());
+	}
+	let mut data = to_data(input)?;
+	apply_delta_data(&String::new(), &mut data, delta_map);
+	*input = from_data(&mut data)?;
+	Ok(())
+}
+
+fn apply_delta_data(id: &String, data: &mut ParsedData, map: &HashMap<String, f64>) {
+	let id = format!("{}----{}", id, data.name);
+	match &mut data.data {
+		DataEnum::Node(inner) => {
+			for inside in inner {
+				apply_delta_data(&id, inside, map);
+			}
+		},
+		DataEnum::Map(box_inside) => {
+			let (key, mut inner) = *box_inside.clone();
+			apply_delta_data(&id, &mut inner, map);
+			*box_inside = Box::new((key, inner));
+		},
+		DataEnum::Enum(_, inner) => {
+			for inside in inner {
+				apply_delta_data(&id, inside, map);
+			}
+		},
+		DataEnum::Int(value, range) => {
+			if let Some(t) = map.get(&id) {
+				let x = *t as i128 + *value;
+				let compress = if x > *range.end() {
+					*range.end()
+				}else if x < *range.start(){
+					*range.start()
+				}else {
+					x
+				};
+				*value = compress;
+			}
+		},
+		DataEnum::Float(value) => {
+			if let Some(t) = map.get(&id) {
+					*value = *t as f64 + *value;
+			}
+		},
+		_ => {}
+	}
+}
+
+fn caculate_delta_data(left: ParsedData, right: ParsedData, map: &mut HashMap<String, f64>, id: String){
+	let id = format!("{}----{}", id, left.name);
+	match (left.data, right.data) {
+		(DataEnum::Node(linner), DataEnum::Node(rinner))=> {
+			for (linside, rinside) in linner.into_iter().zip(rinner.into_iter()) {
+				caculate_delta_data(linside, rinside, map, id.clone());
+			}
+		},
+		(DataEnum::Map(lbox_inside), DataEnum::Map(rbox_inside),) => {
+			let ((_, linner), (_, rinner)) = (*lbox_inside, *rbox_inside);
+			caculate_delta_data(linner, rinner, map, id);
+		},
+		(DataEnum::Enum(_, linner), DataEnum::Enum(_, rinner)) => {
+			for (linside, rinside) in linner.into_iter().zip(rinner.into_iter()) {
+				caculate_delta_data(linside, rinside, map, id.clone());
+			}
+		},
+		(DataEnum::Int(lvalue, _), DataEnum::Int(rvalue, _)) => {
+			if lvalue != rvalue {
+				map.insert(id, (lvalue - rvalue) as f64);
+			}
+		},
+		(DataEnum::Float(lvalue), DataEnum::Float(rvalue)) => {
+			if lvalue != rvalue {
+				map.insert(id, (lvalue - rvalue) as f64);
 			}
 		},
 		_ => {}
