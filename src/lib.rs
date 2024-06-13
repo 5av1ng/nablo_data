@@ -825,6 +825,28 @@ fn animation_caculate(id: &String, data: &mut ParsedData, duration: &Duration, m
 						x
 					};
 					*value = compress;
+				}else {
+					if duration > &t.len() && !t.is_empty() {
+						let x = t.end_value() as i128;
+						let compress = if x > *range.end() {
+							*range.end()
+						}else if x < *range.start() {
+							*range.start()
+						}else {
+							x
+						};
+						*value = compress
+					}else if duration < &t.start_time && !t.is_empty() {
+						let x = t.start_value as i128;
+						let compress = if x > *range.end() {
+							*range.end()
+						}else if x < *range.start() {
+							*range.start()
+						}else {
+							x
+						};
+						*value = compress;
+					}
 				}
 			}
 		},
@@ -832,6 +854,13 @@ fn animation_caculate(id: &String, data: &mut ParsedData, duration: &Duration, m
 			if let Some(t) = map.get(&id) {
 				if let Some(x) = t.caculate(duration) {
 					*value = x as f64;
+				}else {
+					if duration > &(t.len() + t.start_time) && !t.is_empty() {
+						let x = t.end_value() as f64;
+						*value = x
+					}else if duration < &t.start_time && !t.is_empty() {
+						*value = t.start_value as f64
+					}
 				}
 			}
 		},
