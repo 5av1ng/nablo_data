@@ -350,7 +350,7 @@ impl ser::SerializeTupleVariant for Layer {
 	fn end(self) -> Result<ParsedData, Error> { 
 		Ok(ParsedData {
 			name: self.final_name.clone(), 
-			data: DataEnum::Enum(self.final_name.clone(), self.inner.into()),
+			data: DataEnum::Enum(self.final_name.clone(), self.inner),
 			need_delete: false
 		}) 
 	}
@@ -442,7 +442,7 @@ impl ser::SerializeStructVariant for Layer {
 
 	fn end(self) -> Result<ParsedData, Error> { 
 		Ok(ParsedData{
-			data: DataEnum::Enum(self.final_name.clone(), self.inner.into()),
+			data: DataEnum::Enum(self.final_name.clone(), self.inner),
 			name: self.final_name,
 			need_delete: false
 		})
@@ -514,7 +514,7 @@ impl<'a, 'de> Deserializer<'de> for &'a mut DeParser<'_> {
 				self.deserialize_map(input)
 			},
 			DataEnum::Map(_) => self.deserialize_map(input),
-			DataEnum::Enum(_, _) => self.deserialize_enum(&"", &[], input),
+			DataEnum::Enum(_, _) => self.deserialize_enum("", &[], input),
 			DataEnum::Data(_) => self.deserialize_bytes(input),
 			DataEnum::String(_) => self.deserialize_string(input),
 			DataEnum::Int(_, _) => self.deserialize_i64(input),
@@ -536,7 +536,7 @@ impl<'a, 'de> Deserializer<'de> for &'a mut DeParser<'_> {
 
 	fn deserialize_str<V: Visitor<'de>>(self, input: V) -> Result<V::Value, Error> {
 		if let DataEnum::String(t) = &self.data.data {
-			let value = input.visit_str(&t)?;
+			let value = input.visit_str(t)?;
 			self.data.need_delete = true;
 			Ok(value)
 		}else {
@@ -546,7 +546,7 @@ impl<'a, 'de> Deserializer<'de> for &'a mut DeParser<'_> {
 
 	fn deserialize_bytes<V: Visitor<'de>>(self, input: V) -> Result<V::Value, Error> {
 		if let DataEnum::Data(t) = &self.data.data {
-			let value = input.visit_bytes(&t)?;
+			let value = input.visit_bytes(t)?;
 			self.data.need_delete = true;
 			Ok(value)
 		}else {
@@ -637,7 +637,7 @@ impl<'a, 'de> Deserializer<'de> for &'a mut DeParser<'_> {
 			}
 		}
 		else { 
-			return Err(Error::UnexpectedType(stringify!(enum).to_string())); 
+			Err(Error::UnexpectedType(stringify!(enum).to_string()))
 		}
 		
 	}
@@ -656,7 +656,7 @@ impl<'de> SeqAccess<'de> for DeLayer<'_> {
 		if let DataEnum::Node(vec) = &mut self.inner.data.data {
 			vec.retain(|data| !data.need_delete);
 			if vec.is_empty() {
-				return Ok(None)
+				Ok(None)
 			}else {
 				let len = vec.len() - 1;
 				Ok(Some(seed.deserialize(&mut DeParser { data: &mut vec[len] })?))
@@ -667,7 +667,7 @@ impl<'de> SeqAccess<'de> for DeLayer<'_> {
 	}
 }
 
-impl<'de, 'a> MapAccess<'de> for DeMap<'_> {
+impl<'de> MapAccess<'de> for DeMap<'_> {
 	type Error = Error;
 	fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Error>
 	where 
@@ -676,7 +676,7 @@ impl<'de, 'a> MapAccess<'de> for DeMap<'_> {
 		if let DataEnum::Node(vec) = &mut self.inner.data.data {
 			vec.retain(|data| !data.need_delete);
 			if vec.is_empty() {
-				return Ok(None)
+				Ok(None)
 			}else {
 				let len = vec.len() - 1;
 				if let DataEnum::Map(box_inside) = &vec[len].data {
@@ -684,7 +684,7 @@ impl<'de, 'a> MapAccess<'de> for DeMap<'_> {
 					self.temp = Some(value);
 					Ok(Some(seed.deserialize(&mut DeParser { data: &mut key })?))
 				}else {
-					return Err(Error::UnexpectedType(stringify!(Map).to_string()));
+					Err(Error::UnexpectedType(stringify!(Map).to_string()))
 				}
 			}
 		}else {
@@ -825,28 +825,26 @@ fn animation_caculate(id: &String, data: &mut ParsedData, duration: &Duration, m
 						x
 					};
 					*value = compress;
-				}else {
-					if duration > &t.len() && !t.is_empty() {
-						let x = t.end_value() as i128;
-						let compress = if x > *range.end() {
-							*range.end()
-						}else if x < *range.start() {
-							*range.start()
-						}else {
-							x
-						};
-						*value = compress
-					}else if duration < &t.start_time && !t.is_empty() {
-						let x = t.start_value as i128;
-						let compress = if x > *range.end() {
-							*range.end()
-						}else if x < *range.start() {
-							*range.start()
-						}else {
-							x
-						};
-						*value = compress;
-					}
+				}else if duration > &t.len() && !t.is_empty() {
+					let x = t.end_value() as i128;
+					let compress = if x > *range.end() {
+						*range.end()
+					}else if x < *range.start() {
+						*range.start()
+					}else {
+						x
+					};
+					*value = compress
+				}else if duration < &t.start_time && !t.is_empty() {
+					let x = t.start_value as i128;
+					let compress = if x > *range.end() {
+						*range.end()
+					}else if x < *range.start() {
+						*range.start()
+					}else {
+						x
+					};
+					*value = compress;
 				}
 			}
 		},
@@ -854,13 +852,11 @@ fn animation_caculate(id: &String, data: &mut ParsedData, duration: &Duration, m
 			if let Some(t) = map.get(&id) {
 				if let Some(x) = t.caculate(duration) {
 					*value = x as f64;
-				}else {
-					if duration > &(t.len() + t.start_time) && !t.is_empty() {
-						let x = t.end_value() as f64;
-						*value = x
-					}else if duration < &t.start_time && !t.is_empty() {
-						*value = t.start_value as f64
-					}
+				}else if duration > &(t.len() + t.start_time) && !t.is_empty() {
+					let x = t.end_value() as f64;
+					*value = x
+				}else if duration < &t.start_time && !t.is_empty() {
+					*value = t.start_value as f64
 				}
 			}
 		},
@@ -921,7 +917,7 @@ fn apply_delta_data(id: &String, data: &mut ParsedData, map: &HashMap<String, f6
 		},
 		DataEnum::Float(value) => {
 			if let Some(t) = map.get(&id) {
-					*value = *t as f64 + *value;
+					*value += *t;
 			}
 		},
 		_ => {}
@@ -952,7 +948,7 @@ fn caculate_delta_data(left: ParsedData, right: ParsedData, map: &mut HashMap<St
 		},
 		(DataEnum::Float(lvalue), DataEnum::Float(rvalue)) => {
 			if lvalue != rvalue {
-				map.insert(id, (lvalue - rvalue) as f64);
+				map.insert(id, lvalue - rvalue);
 			}
 		},
 		_ => {}
